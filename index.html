@@ -252,7 +252,7 @@
 
     // ====== STATE ======
     let abortController = null;
-    let conversation = [];   // { role: "user" | "assistant", content }
+    let conversation = [];
 
     // ====== AUTH ======
     function isAuth() { return sessionStorage.getItem(SESS_AUTH) === "true"; }
@@ -308,7 +308,26 @@
       return div;
     }
 
-    // ====== SEND MESSAGE (GPT‑5.5, SSE parser) ======
+    // ====== SSE PARSER ======
+    function parseSSEChunk(chunk, onDelta) {
+      const lines = chunk.split("\n");
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const jsonStr = line.slice(5).trim();  // remove "data:" and any leading space
+        if (!jsonStr) continue;
+        try {
+          const obj = JSON.parse(jsonStr);
+          if (obj.delta) {
+            onDelta(obj.delta);
+          }
+          // ignore everything else
+        } catch (e) {
+          // malformed JSON — skip
+        }
+      }
+    }
+
+    // ====== SEND MESSAGE ======
     async function sendMessage() {
       const rawMsg = userInput.value.trim();
       if (!rawMsg) return;
@@ -328,6 +347,7 @@
       // Assistant placeholder
       const assistantDiv = document.createElement("div");
       assistantDiv.className = "message assistant";
+      assistantDiv.textContent = "";
       outputArea.appendChild(assistantDiv);
       outputArea.scrollTop = outputArea.scrollHeight;
 
@@ -355,56 +375,45 @@
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = "";
+        let leftover = "";  // holds incomplete SSE lines
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
+          const text = decoder.decode(value, { stream: true });
+          const combined = leftover + text;
 
-          // SSE events end with \n\n
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop();   // keep incomplete chunk
+          // SSE events are separated by double newline. Find the last \n\n to split.
+          const lastDoubleIdx = combined.lastIndexOf("\n\n");
+          if (lastDoubleIdx === -1) {
+            // No complete event yet — keep accumulating
+            leftover = combined;
+            continue;
+          }
 
-          for (const part of parts) {
-            if (!part.trim()) continue;
-            // Get lines
-            const lines = part.split("\n");
-            for (const line of lines) {
-              if (line.startsWith("data: ")) {
-                const jsonStr = line.slice(6).trim();
-                try {
-                  const obj = JSON.parse(jsonStr);
-                  if (obj.delta) {
-                    fullResponse += obj.delta;
-                    assistantDiv.textContent = fullResponse;
-                    outputArea.scrollTop = outputArea.scrollHeight;
-                  }
-                  // ignore other fields (status, finish, done, etc.)
-                } catch (e) {
-                  // Ignore unparseable lines
-                }
-              }
-            }
+          const complete = combined.slice(0, lastDoubleIdx);
+          leftover = combined.slice(lastDoubleIdx + 2);
+
+          // Process complete events
+          const events = complete.split("\n\n");
+          for (const event of events) {
+            if (!event.trim()) continue;
+            parseSSEChunk(event, (delta) => {
+              fullResponse += delta;
+              assistantDiv.textContent = fullResponse;
+              outputArea.scrollTop = outputArea.scrollHeight;
+            });
           }
         }
 
-        // Flush remaining buffer
-        if (buffer.trim()) {
-          const lines = buffer.split("\n");
-          for (const line of lines) {
-            if (line.startsWith("data: ")) {
-              const jsonStr = line.slice(6).trim();
-              try {
-                const obj = JSON.parse(jsonStr);
-                if (obj.delta) {
-                  fullResponse += obj.delta;
-                  assistantDiv.textContent = fullResponse;
-                }
-              } catch (e) {}
-            }
-          }
+        // Process any remaining data after stream ends
+        if (leftover.trim()) {
+          parseSSEChunk(leftover, (delta) => {
+            fullResponse += delta;
+            assistantDiv.textContent = fullResponse;
+            outputArea.scrollTop = outputArea.scrollHeight;
+          });
         }
 
       } catch (err) {
