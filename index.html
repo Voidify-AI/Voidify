@@ -231,7 +231,7 @@
     const SESS_AUTH = "vfy_auth";
     const SESS_USER = "vfy_user";
 
-    // ====== UNLIMITED.SURF API (REAL GPT-5.5 ENDPOINT) ======
+    // ====== UNLIMITED.SURF API ======
     const API_KEY = "ua_0pmF5cFsvmZzWRFDH9K5y8WXY0yWz28f";
     const API_URL = "https://unlimited.surf/api/chat";
     const MODEL = "gateway-gpt-5-5";
@@ -308,7 +308,7 @@
       return div;
     }
 
-    // ====== SEND MESSAGE (GPT‑5.5, raw streaming) ======
+    // ====== SEND MESSAGE (GPT‑5.5, SSE parser) ======
     async function sendMessage() {
       const rawMsg = userInput.value.trim();
       if (!rawMsg) return;
@@ -325,10 +325,12 @@
       appendMsg("user", rawMsg);
       conversation.push({ role: "user", content: rawMsg });
 
-      // Placeholder for assistant streaming response
-      const assistantDiv = appendMsg("assistant", "");
-      const assistantSpan = document.createElement("span");
-      assistantDiv.appendChild(assistantSpan);
+      // Assistant placeholder
+      const assistantDiv = document.createElement("div");
+      assistantDiv.className = "message assistant";
+      outputArea.appendChild(assistantDiv);
+      outputArea.scrollTop = outputArea.scrollHeight;
+
       let fullResponse = "";
 
       try {
@@ -341,7 +343,7 @@
           body: JSON.stringify({
             message: rawMsg,
             model: MODEL,
-            effort: "medium"       // optional, kept as in original snippet
+            effort: "medium"
           }),
           signal
         });
@@ -353,29 +355,64 @@
 
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
+        let buffer = "";
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          fullResponse += chunk;
-          assistantSpan.textContent = fullResponse;
-          outputArea.scrollTop = outputArea.scrollHeight;
+          buffer += decoder.decode(value, { stream: true });
+
+          // SSE events end with \n\n
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop();   // keep incomplete chunk
+
+          for (const part of parts) {
+            if (!part.trim()) continue;
+            // Get lines
+            const lines = part.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                const jsonStr = line.slice(6).trim();
+                try {
+                  const obj = JSON.parse(jsonStr);
+                  if (obj.delta) {
+                    fullResponse += obj.delta;
+                    assistantDiv.textContent = fullResponse;
+                    outputArea.scrollTop = outputArea.scrollHeight;
+                  }
+                  // ignore other fields (status, finish, done, etc.)
+                } catch (e) {
+                  // Ignore unparseable lines
+                }
+              }
+            }
+          }
         }
 
-        // Flush remaining
-        const finalChunk = decoder.decode();
-        if (finalChunk) {
-          fullResponse += finalChunk;
-          assistantSpan.textContent = fullResponse;
+        // Flush remaining buffer
+        if (buffer.trim()) {
+          const lines = buffer.split("\n");
+          for (const line of lines) {
+            if (line.startsWith("data: ")) {
+              const jsonStr = line.slice(6).trim();
+              try {
+                const obj = JSON.parse(jsonStr);
+                if (obj.delta) {
+                  fullResponse += obj.delta;
+                  assistantDiv.textContent = fullResponse;
+                }
+              } catch (e) {}
+            }
+          }
         }
+
       } catch (err) {
         if (err.name === "AbortError") {
           statusBar.textContent = "Aborted.";
         } else {
           statusBar.textContent = `Error: ${err.message}`;
-          assistantSpan.textContent = `[Error] ${err.message}`;
+          assistantDiv.textContent = `[Error] ${err.message}`;
         }
       } finally {
         conversation.push({ role: "assistant", content: fullResponse });
