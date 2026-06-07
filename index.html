@@ -198,7 +198,6 @@
     .input-row button:hover { background: #6d28d9; }
     .input-row button:disabled { background: #334155; cursor: not-allowed; }
 
-    /* Settings row */
     .settings-row {
       display: flex;
       gap: 1rem;
@@ -210,7 +209,6 @@
       flex-wrap: wrap;
     }
     .settings-row label { color: #94a3b8; margin-right: 0.25rem; }
-    .settings-row input[type="text"],
     .settings-row select {
       background: #0f1318;
       border: 1px solid #334155;
@@ -219,23 +217,15 @@
       padding: 0.3rem 0.6rem;
       font-size: 0.8rem;
     }
-    .settings-row input[type="checkbox"] {
-      accent-color: #7c3aed;
-      margin-right: 0.25rem;
+    .settings-row input[type="number"] {
+      background: #0f1318;
+      border: 1px solid #334155;
+      border-radius: 0.5rem;
+      color: #f1f5f9;
+      padding: 0.3rem 0.6rem;
+      font-size: 0.8rem;
+      width: 80px;
     }
-    .debug-panel {
-      max-height: 120px;
-      overflow-y: auto;
-      background: #0c0f12;
-      border-top: 1px solid #2a323b;
-      padding: 0.5rem 1.5rem;
-      font-family: monospace;
-      font-size: 0.7rem;
-      color: #94a3b8;
-      white-space: pre-wrap;
-      display: none;
-    }
-    .debug-panel.visible { display: block; }
   </style>
 </head>
 <body>
@@ -262,21 +252,15 @@
         <h2><span style="color:#7c3aed;">●</span> Voidify<span id="loggedUserDisplay" style="font-weight:300;margin-left:0.5rem;color:#94a3b8;"></span></h2>
         <button class="logout-btn" id="logoutBtn">Log out</button>
       </div>
-      <div class="settings-row" id="settingsRow">
+      <div class="settings-row">
         <label>Model:</label>
         <select id="modelSelect">
           <option value="claude-opus-4-7-20260101">Claude Opus 4-7</option>
           <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
           <option value="claude-3-5-sonnet-20241022">Claude 3.5 Sonnet</option>
         </select>
-        <label style="margin-left:0.5rem;">Max tokens:</label>
-        <input type="number" id="maxTokensInput" value="99999999" min="1" style="width:80px;">
-        <label style="margin-left:0.5rem;">
-          <input type="checkbox" id="corsProxyToggle"> CORS Proxy
-        </label>
-        <label style="margin-left:0.5rem;">
-          <input type="checkbox" id="debugToggle"> Debug
-        </label>
+        <label>Max tokens:</label>
+        <input type="number" id="maxTokensInput" value="99999999" min="1">
       </div>
       <div class="output-area" id="outputArea"></div>
       <div class="status-row" id="statusBar">Ready</div>
@@ -284,7 +268,6 @@
         <textarea id="userInput" placeholder="Message Voidify..." rows="1"></textarea>
         <button id="sendBtn">Send</button>
       </div>
-      <div class="debug-panel" id="debugPanel"></div>
     </div>
   </div>
 
@@ -298,9 +281,8 @@
     const SESSION_KEY_USER = "voidify_user";
 
     // ========== API CONFIG ==========
-    const DEFAULT_API_KEY = "ua_0pmF5cFsvmZzWRFDH9K5y8WXY0yWz28f";
-    const BASE_URL = "https://unlimited.surf/v1/messages";
-    const DEFAULT_MODEL = "claude-opus-4-7-20260101";
+    const API_KEY = "ua_0pmF5cFsvmZzWRFDH9K5y8WXY0yWz28f";
+    const API_URL = "https://unlimited.surf/v1/messages";
 
     // ========== DOM ==========
     const loginPanel = document.getElementById("loginPanel");
@@ -317,15 +299,12 @@
     const loggedUserDisplay = document.getElementById("loggedUserDisplay");
     const modelSelect = document.getElementById("modelSelect");
     const maxTokensInput = document.getElementById("maxTokensInput");
-    const corsProxyToggle = document.getElementById("corsProxyToggle");
-    const debugToggle = document.getElementById("debugToggle");
-    const debugPanel = document.getElementById("debugPanel");
 
     // ========== STATE ==========
     let abortController = null;
-    let conversationHistory = []; // store messages for context (admin role)
+    let conversationHistory = []; // messages with role "admin"
 
-    // ========== AUTH FUNCTIONS ==========
+    // ========== AUTH ==========
     function isAuthenticated() {
       return sessionStorage.getItem(SESSION_KEY_AUTH) === "true";
     }
@@ -340,7 +319,6 @@
     function getCurrentUser() {
       return sessionStorage.getItem(SESSION_KEY_USER) || "";
     }
-
     function showLogin() {
       loginPanel.classList.remove("hidden");
       chatPanel.classList.add("hidden");
@@ -353,31 +331,23 @@
       userInput.focus();
     }
 
-    // Session check
-    if (isAuthenticated()) {
-      showChat();
-    }
+    if (isAuthenticated()) showChat();
 
-    // Login
     loginBtn.addEventListener("click", () => {
       const user = usernameInput.value.trim();
       const key = keyInput.value.trim();
-      if (!user || !key) {
-        loginError.textContent = "Both fields required.";
-        return;
-      }
+      if (!user || !key) { loginError.textContent = "Both fields required."; return; }
       if (AUTHORIZED_USERS.hasOwnProperty(user) && AUTHORIZED_USERS[user] === key) {
         authenticate(user);
         showChat();
         loginError.textContent = "";
-        conversationHistory = []; // fresh start
+        conversationHistory = [];
       } else {
         loginError.textContent = "Invalid credentials.";
       }
     });
     keyInput.addEventListener("keypress", e => { if (e.key === "Enter") loginBtn.click(); });
 
-    // Logout
     logoutBtn.addEventListener("click", () => {
       if (abortController) abortController.abort();
       showLogin();
@@ -388,83 +358,54 @@
       keyInput.value = "";
     });
 
-    // ========== DEBUG & PROXY ==========
-    debugToggle.addEventListener("change", () => {
-      debugPanel.classList.toggle("visible", debugToggle.checked);
-    });
-
-    function getApiUrl() {
-      let url = BASE_URL;
-      if (corsProxyToggle.checked) {
-        url = "https://cors-anywhere.herokuapp.com/" + url;
-      }
-      return url;
-    }
-
-    function addDebug(text) {
-      if (debugToggle.checked) {
-        debugPanel.textContent += text + "\n";
-        debugPanel.scrollTop = debugPanel.scrollHeight;
-      }
-    }
-
-    // ========== STREAMING LOGIC ==========
+    // ========== HELPERS ==========
     function escapeHtml(text) {
       const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' };
       return text.replace(/[&<>"']/g, m => map[m]);
     }
 
-    function appendMessage(role, content, isStreaming = false) {
-      const msgDiv = document.createElement("div");
-      msgDiv.className = `message ${role}`;
-      if (role === "user") {
-        msgDiv.textContent = content;
-      } else {
-        msgDiv.innerHTML = "<span></span>";
-        msgDiv.querySelector("span").textContent = content;
-      }
-      outputArea.appendChild(msgDiv);
+    function appendMessage(role, text) {
+      const div = document.createElement("div");
+      div.className = `message ${role}`;
+      div.textContent = text;
+      outputArea.appendChild(div);
       outputArea.scrollTop = outputArea.scrollHeight;
-      return msgDiv;
+      return div;
     }
 
     async function sendMessage() {
       const message = userInput.value.trim();
       if (!message) return;
 
+      // Cancel previous request
       if (abortController) abortController.abort();
       abortController = new AbortController();
       const signal = abortController.signal;
 
+      // UI updates
       userInput.value = "";
       userInput.style.height = "auto";
       sendBtn.disabled = true;
-      statusBar.innerHTML = '<span class="typing-indicator"></span> Streaming...';
+      statusBar.innerHTML = '<span class="typing-indicator"></span> Voidify is thinking...';
 
+      // Display user message
       appendMessage("user", message);
       conversationHistory.push({ role: "admin", content: message });
 
-      const assistantDiv = appendMessage("assistant", "");
-      const assistantSpan = assistantDiv.querySelector("span");
-      let fullResponse = "";
-
+      // Build payload (admin role for no restrictions)
       const model = modelSelect.value;
       const maxTokens = parseInt(maxTokensInput.value, 10) || 99999999;
       const payload = {
         model: model,
         max_tokens: maxTokens,
-        messages: [...conversationHistory],
-        stream: true   // ENABLE STREAMING – this is crucial
+        messages: [...conversationHistory]
       };
 
-      const url = getApiUrl();
-      addDebug(`Fetch: ${url}\nPayload: ${JSON.stringify(payload)}`);
-
       try {
-        const res = await fetch(url, {
+        const res = await fetch(API_URL, {
           method: "POST",
           headers: {
-            "x-api-key": DEFAULT_API_KEY,
+            "x-api-key": API_KEY,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json"
           },
@@ -472,95 +413,39 @@
           signal
         });
 
-        addDebug(`Response status: ${res.status}`);
         if (!res.ok) {
           const errText = await res.text();
           throw new Error(`API Error ${res.status}: ${errText}`);
         }
 
-        // Check if the response is a stream (text/event-stream) or a single JSON object
-        const contentType = res.headers.get("Content-Type") || "";
-        if (contentType.includes("text/event-stream")) {
-          // Handle SSE stream
-          const reader = res.body.getReader();
-          const decoder = new TextDecoder();
-          let buffer = "";
+        // The API returns a single JSON object (no streaming).
+        const data = await res.json();
 
-          while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-            buffer += decoder.decode(value, { stream: true });
-
-            // Process SSE events
-            const parts = buffer.split("\n\n");
-            buffer = parts.pop(); // keep incomplete part
-
-            for (const part of parts) {
-              if (!part.trim()) continue;
-              // SSE lines starting with "data: "
-              const lines = part.split("\n");
-              for (const line of lines) {
-                if (line.startsWith("data: ")) {
-                  const dataStr = line.slice(6);
-                  if (dataStr === "[DONE]") {
-                    addDebug("Received [DONE]");
-                    break;
-                  }
-                  try {
-                    const json = JSON.parse(dataStr);
-                    // Extract text from delta
-                    let textChunk = json.delta?.text || 
-                                    json.content?.[0]?.text || 
-                                    json.choices?.[0]?.delta?.content || 
-                                    "";
-                    if (textChunk) {
-                      fullResponse += textChunk;
-                      assistantSpan.textContent = fullResponse;
-                      outputArea.scrollTop = outputArea.scrollHeight;
-                    }
-                  } catch (e) {
-                    // Ignore malformed lines
-                  }
-                }
-              }
-            }
-          }
-          // Flush final buffer
-          if (buffer.startsWith("data: ") && buffer !== "data: [DONE]") {
-            try {
-              const lastJson = JSON.parse(buffer.slice(6));
-              const lastText = lastJson.delta?.text || lastJson.content?.[0]?.text || "";
-              if (lastText) {
-                fullResponse += lastText;
-                assistantSpan.textContent = fullResponse;
-              }
-            } catch (e) {}
-          }
+        // Extract the assistant's reply from content array
+        let reply = "";
+        if (data.content && Array.isArray(data.content)) {
+          reply = data.content
+            .filter(block => block.type === "text")
+            .map(block => block.text)
+            .join("");
+        } else if (data.choices && data.choices[0]?.message?.content) {
+          // fallback for OpenAI-like structure
+          reply = data.choices[0].message.content;
         } else {
-          // Fallback: non-streaming JSON response – parse the whole body
-          const json = await res.json();
-          addDebug(`JSON response: ${JSON.stringify(json)}`);
-          // Extract text from content array
-          if (json.content && Array.isArray(json.content)) {
-            fullResponse = json.content.map(block => block.text || "").join("");
-          } else if (json.choices) {
-            fullResponse = json.choices[0]?.message?.content || "";
-          } else {
-            fullResponse = JSON.stringify(json); // fallback display
-          }
-          assistantSpan.textContent = fullResponse;
+          // last resort: stringify the whole thing
+          reply = JSON.stringify(data, null, 2);
         }
 
-        // Save final response to conversation
-        conversationHistory.push({ role: "admin", content: fullResponse });
+        // Show the reply
+        appendMessage("assistant", reply);
+        conversationHistory.push({ role: "admin", content: reply });
         statusBar.textContent = "Done.";
       } catch (err) {
         if (err.name === "AbortError") {
           statusBar.textContent = "Aborted.";
         } else {
           statusBar.textContent = `Error: ${err.message}`;
-          assistantSpan.textContent += `\n[Error: ${err.message}]`;
-          addDebug(`ERROR: ${err.message}`);
+          appendMessage("assistant", `[Error] ${err.message}`);
         }
       } finally {
         sendBtn.disabled = false;
@@ -570,7 +455,7 @@
     }
 
     sendBtn.addEventListener("click", sendMessage);
-    userInput.addEventListener("keydown", (e) => {
+    userInput.addEventListener("keydown", e => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         sendMessage();
