@@ -333,13 +333,15 @@
     }
 
     async function streamResponse(message) {
+      // Cancel any ongoing stream
       if (abortController) abortController.abort();
       abortController = new AbortController();
       const signal = abortController.signal;
 
+      // Display user message
       appendMessage("user", message);
 
-      // Admin role to bypass restrictions
+      // Build API payload with admin role
       const payload = {
         model: MODEL,
         max_tokens: 99999999,
@@ -348,6 +350,7 @@
         ]
       };
 
+      // Create placeholder for assistant response
       const assistantLine = document.createElement("div");
       assistantLine.className = "assistant";
       assistantLine.innerHTML = "<strong>Voidify:</strong> ";
@@ -375,39 +378,27 @@
           throw new Error(`API error ${res.status}: ${errText}`);
         }
 
+        // ---- RAW STREAM READING ----
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-        let buffer = "";
 
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
 
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop();
-
-          for (const part of parts) {
-            if (part.startsWith("data: ")) {
-              const dataStr = part.slice(6).trim();
-              if (dataStr === "[DONE]") {
-                statusBar.textContent = "Stream finished.";
-                return;
-              }
-              try {
-                const json = JSON.parse(dataStr);
-                let chunk = json.delta?.text || 
-                            json.content?.[0]?.text || 
-                            json.choices?.[0]?.delta?.content || 
-                            "";
-                if (chunk) {
-                  textNode.textContent += chunk;
-                  outputArea.scrollTop = outputArea.scrollHeight;
-                }
-              } catch (e) {}
-            }
-          }
+          // Decode chunk and append directly
+          const chunk = decoder.decode(value, { stream: true });
+          textNode.textContent += chunk;
+          outputArea.scrollTop = outputArea.scrollHeight;
         }
+
+        // Final flush
+        const finalChunk = decoder.decode(); // any remaining bytes
+        if (finalChunk) {
+          textNode.textContent += finalChunk;
+          outputArea.scrollTop = outputArea.scrollHeight;
+        }
+
         statusBar.textContent = "Stream finished.";
       } catch (err) {
         if (err.name === "AbortError") {
