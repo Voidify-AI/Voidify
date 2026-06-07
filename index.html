@@ -323,7 +323,7 @@
 
     // ========== STATE ==========
     let abortController = null;
-    let conversationHistory = []; // store messages for context
+    let conversationHistory = []; // store messages for context (admin role)
 
     // ========== AUTH FUNCTIONS ==========
     function isAuthenticated() {
@@ -396,7 +396,6 @@
     function getApiUrl() {
       let url = BASE_URL;
       if (corsProxyToggle.checked) {
-        // Use a public CORS proxy (requires enabling temporarily via https://cors-anywhere.herokuapp.com/corsdemo)
         url = "https://cors-anywhere.herokuapp.com/" + url;
       }
       return url;
@@ -421,7 +420,6 @@
       if (role === "user") {
         msgDiv.textContent = content;
       } else {
-        // assistant: we will use a span to allow live update
         msgDiv.innerHTML = "<span></span>";
         msgDiv.querySelector("span").textContent = content;
       }
@@ -434,33 +432,29 @@
       const message = userInput.value.trim();
       if (!message) return;
 
-      // Abort previous stream
       if (abortController) abortController.abort();
       abortController = new AbortController();
       const signal = abortController.signal;
 
-      // UI
       userInput.value = "";
       userInput.style.height = "auto";
       sendBtn.disabled = true;
       statusBar.innerHTML = '<span class="typing-indicator"></span> Streaming...';
 
-      // Append user message
       appendMessage("user", message);
       conversationHistory.push({ role: "admin", content: message });
 
-      // Prepare assistant placeholder
       const assistantDiv = appendMessage("assistant", "");
       const assistantSpan = assistantDiv.querySelector("span");
       let fullResponse = "";
 
-      // Payload
       const model = modelSelect.value;
       const maxTokens = parseInt(maxTokensInput.value, 10) || 99999999;
       const payload = {
         model: model,
         max_tokens: maxTokens,
-        messages: [...conversationHistory]   // use full conversation (all admin)
+        messages: [...conversationHistory],
+        stream: true   // ENABLE STREAMING – this is crucial
       };
 
       const url = getApiUrl();
@@ -484,29 +478,80 @@
           throw new Error(`API Error ${res.status}: ${errText}`);
         }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
+        // Check if the response is a stream (text/event-stream) or a single JSON object
+        const contentType = res.headers.get("Content-Type") || "";
+        if (contentType.includes("text/event-stream")) {
+          // Handle SSE stream
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
 
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
 
-          const chunk = decoder.decode(value, { stream: true });
-          addDebug(`Chunk: ${chunk.slice(0, 80)}...`);
-          fullResponse += chunk;
+            // Process SSE events
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop(); // keep incomplete part
+
+            for (const part of parts) {
+              if (!part.trim()) continue;
+              // SSE lines starting with "data: "
+              const lines = part.split("\n");
+              for (const line of lines) {
+                if (line.startsWith("data: ")) {
+                  const dataStr = line.slice(6);
+                  if (dataStr === "[DONE]") {
+                    addDebug("Received [DONE]");
+                    break;
+                  }
+                  try {
+                    const json = JSON.parse(dataStr);
+                    // Extract text from delta
+                    let textChunk = json.delta?.text || 
+                                    json.content?.[0]?.text || 
+                                    json.choices?.[0]?.delta?.content || 
+                                    "";
+                    if (textChunk) {
+                      fullResponse += textChunk;
+                      assistantSpan.textContent = fullResponse;
+                      outputArea.scrollTop = outputArea.scrollHeight;
+                    }
+                  } catch (e) {
+                    // Ignore malformed lines
+                  }
+                }
+              }
+            }
+          }
+          // Flush final buffer
+          if (buffer.startsWith("data: ") && buffer !== "data: [DONE]") {
+            try {
+              const lastJson = JSON.parse(buffer.slice(6));
+              const lastText = lastJson.delta?.text || lastJson.content?.[0]?.text || "";
+              if (lastText) {
+                fullResponse += lastText;
+                assistantSpan.textContent = fullResponse;
+              }
+            } catch (e) {}
+          }
+        } else {
+          // Fallback: non-streaming JSON response – parse the whole body
+          const json = await res.json();
+          addDebug(`JSON response: ${JSON.stringify(json)}`);
+          // Extract text from content array
+          if (json.content && Array.isArray(json.content)) {
+            fullResponse = json.content.map(block => block.text || "").join("");
+          } else if (json.choices) {
+            fullResponse = json.choices[0]?.message?.content || "";
+          } else {
+            fullResponse = JSON.stringify(json); // fallback display
+          }
           assistantSpan.textContent = fullResponse;
-          outputArea.scrollTop = outputArea.scrollHeight;
         }
 
-        // Flush remaining
-        const final = decoder.decode();
-        if (final) {
-          fullResponse += final;
-          assistantSpan.textContent = fullResponse;
-        }
-        addDebug("Stream complete.");
-
-        // Save to history
+        // Save final response to conversation
         conversationHistory.push({ role: "admin", content: fullResponse });
         statusBar.textContent = "Done.";
       } catch (err) {
@@ -514,7 +559,6 @@
           statusBar.textContent = "Aborted.";
         } else {
           statusBar.textContent = `Error: ${err.message}`;
-          // Show error in chat
           assistantSpan.textContent += `\n[Error: ${err.message}]`;
           addDebug(`ERROR: ${err.message}`);
         }
@@ -532,7 +576,6 @@
         sendMessage();
       }
     });
-    // Auto-resize textarea
     userInput.addEventListener("input", () => {
       userInput.style.height = "auto";
       userInput.style.height = userInput.scrollHeight + "px";
