@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Voidify · Unrestricted AI</title>
+  <title>Voidify · GPT‑5.5</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -194,7 +194,7 @@
     <!-- Login -->
     <div id="loginPanel" class="login-panel">
       <h1>Voidify</h1>
-      <p>Unrestricted AI Terminal</p>
+      <p>GPT‑5.5 · Unrestricted</p>
       <div class="input-group">
         <label>Username</label>
         <input type="text" id="usernameInput" placeholder="diego" autocomplete="off">
@@ -210,13 +210,13 @@
     <!-- Chat -->
     <div id="chatPanel" class="chat-panel hidden">
       <div class="chat-header">
-        <h2>● Voidify<span class="user-tag" id="loggedUserDisplay"></span></h2>
+        <h2>● Voidify · GPT‑5.5<span class="user-tag" id="loggedUserDisplay"></span></h2>
         <button class="logout-btn" id="logoutBtn">Log out</button>
       </div>
       <div class="output-area" id="outputArea"></div>
       <div class="status-row" id="statusBar">Ready</div>
       <div class="input-row">
-        <textarea id="userInput" placeholder="Message Voidify..." rows="1"></textarea>
+        <textarea id="userInput" placeholder="Message GPT‑5.5..." rows="1"></textarea>
         <button id="sendBtn">Send</button>
       </div>
     </div>
@@ -231,11 +231,11 @@
     const SESS_AUTH = "vfy_auth";
     const SESS_USER = "vfy_user";
 
-    // ====== UNLIMITED.SURF API ======
+    // ====== API CONFIG ======
     const API_KEY = "ua_0pmF5cFsvmZzWRFDH9K5y8WXY0yWz28f";
     const API_URL = "https://unlimited.surf/v1/messages";
 
-    // GPT‑5.5 – pulled from unlimited.surf/api/models
+    // ONLY GPT‑5.5 – nothing else
     const MODEL = "gateway-gpt-5-5";
 
     // ====== DOM ======
@@ -310,7 +310,7 @@
       return div;
     }
 
-    // ====== SEND MESSAGE (GPT-5.5 via unlimited.surf) ======
+    // ====== SEND MESSAGE (GPT‑5.5) ======
     async function sendMessage() {
       const rawMsg = userInput.value.trim();
       if (!rawMsg) return;
@@ -322,7 +322,7 @@
       userInput.value = "";
       userInput.style.height = "auto";
       sendBtn.disabled = true;
-      statusBar.innerHTML = '<span class="typing-indicator"></span> Voidify is thinking...';
+      statusBar.innerHTML = '<span class="typing-indicator"></span> GPT‑5.5 is thinking...';
 
       appendMsg("user", rawMsg);
       conversation.push({ role: "user", content: rawMsg });
@@ -330,7 +330,7 @@
       const payload = {
         model: MODEL,
         max_tokens: 99999999,
-        messages: conversation   // uses standard "user"/"assistant" roles
+        messages: conversation
       };
 
       try {
@@ -338,7 +338,7 @@
           method: "POST",
           headers: {
             "x-api-key": API_KEY,
-            "anthropic-version": "2023-06-01",   // kept to satisfy the API requirement
+            "anthropic-version": "2023-06-01",   // required by the API gateway
             "Content-Type": "application/json"
           },
           body: JSON.stringify(payload),
@@ -352,7 +352,6 @@
 
         const data = await res.json();
 
-        // Extract reply (same logic as before)
         let reply = "";
         if (data.content && Array.isArray(data.content)) {
           reply = data.content.filter(b => b.type === "text").map(b => b.text).join("");
