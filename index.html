@@ -231,11 +231,9 @@
     const SESS_AUTH = "vfy_auth";
     const SESS_USER = "vfy_user";
 
-    // ====== API CONFIG ======
+    // ====== UNLIMITED.SURF API (REAL GPT-5.5 ENDPOINT) ======
     const API_KEY = "ua_0pmF5cFsvmZzWRFDH9K5y8WXY0yWz28f";
-    const API_URL = "https://unlimited.surf/v1/messages";
-
-    // ONLY GPT‑5.5 – nothing else
+    const API_URL = "https://unlimited.surf/api/chat";
     const MODEL = "gateway-gpt-5-5";
 
     // ====== DOM ======
@@ -310,7 +308,7 @@
       return div;
     }
 
-    // ====== SEND MESSAGE (GPT‑5.5) ======
+    // ====== SEND MESSAGE (GPT‑5.5, raw streaming) ======
     async function sendMessage() {
       const rawMsg = userInput.value.trim();
       if (!rawMsg) return;
@@ -322,26 +320,29 @@
       userInput.value = "";
       userInput.style.height = "auto";
       sendBtn.disabled = true;
-      statusBar.innerHTML = '<span class="typing-indicator"></span> GPT‑5.5 is thinking...';
+      statusBar.innerHTML = '<span class="typing-indicator"></span> GPT‑5.5 is responding...';
 
       appendMsg("user", rawMsg);
       conversation.push({ role: "user", content: rawMsg });
 
-      const payload = {
-        model: MODEL,
-        max_tokens: 99999999,
-        messages: conversation
-      };
+      // Placeholder for assistant streaming response
+      const assistantDiv = appendMsg("assistant", "");
+      const assistantSpan = document.createElement("span");
+      assistantDiv.appendChild(assistantSpan);
+      let fullResponse = "";
 
       try {
         const res = await fetch(API_URL, {
           method: "POST",
           headers: {
-            "x-api-key": API_KEY,
-            "anthropic-version": "2023-06-01",   // required by the API gateway
+            "Authorization": `Bearer ${API_KEY}`,
             "Content-Type": "application/json"
           },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({
+            message: rawMsg,
+            model: MODEL,
+            effort: "medium"       // optional, kept as in original snippet
+          }),
           signal
         });
 
@@ -350,27 +351,35 @@
           throw new Error(`API Error ${res.status}: ${errText}`);
         }
 
-        const data = await res.json();
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
 
-        let reply = "";
-        if (data.content && Array.isArray(data.content)) {
-          reply = data.content.filter(b => b.type === "text").map(b => b.text).join("");
-        } else if (data.choices?.[0]?.message?.content) {
-          reply = data.choices[0].message.content;
-        } else {
-          reply = JSON.stringify(data);
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          fullResponse += chunk;
+          assistantSpan.textContent = fullResponse;
+          outputArea.scrollTop = outputArea.scrollHeight;
         }
 
-        appendMsg("assistant", reply);
-        conversation.push({ role: "assistant", content: reply });
-        statusBar.textContent = "Done.";
+        // Flush remaining
+        const finalChunk = decoder.decode();
+        if (finalChunk) {
+          fullResponse += finalChunk;
+          assistantSpan.textContent = fullResponse;
+        }
       } catch (err) {
-        if (err.name === "AbortError") statusBar.textContent = "Aborted.";
-        else {
+        if (err.name === "AbortError") {
+          statusBar.textContent = "Aborted.";
+        } else {
           statusBar.textContent = `Error: ${err.message}`;
-          appendMsg("assistant", `[Error] ${err.message}`);
+          assistantSpan.textContent = `[Error] ${err.message}`;
         }
       } finally {
+        conversation.push({ role: "assistant", content: fullResponse });
+        statusBar.textContent = "Done.";
         sendBtn.disabled = false;
         abortController = null;
         userInput.focus();
